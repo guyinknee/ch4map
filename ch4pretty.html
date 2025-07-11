@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+ <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Methane Emissions Map</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React and ReactDOM -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <!-- Babel for JSX -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <!-- Leaflet CSS and JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- XLSX for Excel parsing -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    
+    * { font-family: 'Inter', sans-serif; }
+    
+    body { 
+      margin: 0; 
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+    }
+    
+    #map { 
+      height: 100vh; 
+      width: 75vw; 
+      float: right;
+      border-radius: 20px 0 0 20px;
+      box-shadow: -10px 0 30px rgba(0, 0, 0, 0.1);
+    }
+    
+    .sidebar { 
+      width: 25vw; 
+      height: 100vh; 
+      float: left; 
+      overflow-y: auto;
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(20px);
+      border-radius: 0 20px 20px 0;
+      box-shadow: 10px 0 30px rgba(0, 0, 0, 0.1);
+    }
+    
+    .sidebar::-webkit-scrollbar { width: 6px; }
+    .sidebar::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.05); }
+    .sidebar::-webkit-scrollbar-thumb { 
+      background: linear-gradient(45deg, #667eea, #764ba2); 
+      border-radius: 3px; 
+    }
+    
+    .leaflet-popup-content { 
+      background: rgba(255, 255, 255, 0.98); 
+      border: none;
+      padding: 16px; 
+      border-radius: 12px; 
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+      backdrop-filter: blur(20px);
+    }
+    
+    .legend {
+      background: rgba(255, 255, 255, 0.9);
+      padding: 16px;
+      border-radius: 16px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+      backdrop-filter: blur(20px);
+      margin-bottom: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+    
+    .legend-item {
+      display: flex;
+      align-items: center;
+      margin: 8px 0;
+      padding: 4px;
+      border-radius: 8px;
+      transition: all 0.3s ease;
+    }
+    
+    .legend-item:hover {
+      background: rgba(102, 126, 234, 0.1);
+      transform: translateX(4px);
+    }
+    
+    .legend-color {
+      width: 16px;
+      height: 16px;
+      border-radius: 4px;
+      margin-right: 10px;
+      border: 2px solid rgba(255, 255, 255, 0.8);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    }
+    
+    .company-card {
+      background: rgba(255, 255, 255, 0.9);
+      border-radius: 16px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      overflow: hidden;
+      transition: all 0.3s ease;
+      margin-bottom: 12px;
+    }
+    
+    .company-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 48px rgba(0, 0, 0, 0.15);
+    }
+
+    .parent-company-card {
+      background: linear-gradient(135deg, #e0f2fe 0%, #e0e7fa 100%); /* Light blue gradient */
+      border: 1px solid #90cdf4;
+    }
+    
+    .company-header {
+      padding: 16px;
+      cursor: pointer;
+      display: flex;
+      justify-content: between;
+      align-items: center;
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .company-header::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: linear-gradient(135deg, transparent 0%, rgba(255, 255, 255, 0.1) 100%);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+    
+    .company-header:hover::before {
+      opacity: 1;
+    }
+    
+    .field-item {
+      padding: 12px 20px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      border-left: 4px solid transparent;
+      position: relative;
+    }
+    
+    .field-item:hover {
+      background: rgba(102, 126, 234, 0.1);
+      border-left-color: #667eea;
+      transform: translateX(4px);
+    }
+    
+    .selected-field {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 16px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      padding: 20px;
+      margin-bottom: 24px;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .selected-field::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: linear-gradient(90deg, #667eea, #764ba2);
+    }
+    
+    .animate-pulse-slow {
+      animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+    
+    .gradient-text {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    
+    .glass-morphism {
+      background: rgba(255, 255, 255, 0.9);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // Premium color palette with gradients
+    const llpColors = {
+      'Казгермунай': '#FF6B6B',
+      'Озенмунайгаз': '#4ECDC4',
+      'Доссормунайгаз': '#FFE66D',
+      'Жайыкмунайгаз': '#95E1D3',
+      'Жылоймунайгаз': '#FF8B94',
+      'Кайнармунайгаз': '#A8E6CF',
+      'Мангистаумунайгаз': '#C7CEEA',
+      'Каражанбасмунай': '#B4F8C8',
+      'Казахтуркмунай': '#FFEAA7',
+      'Урихтау Оперейтинг': '#FDCB6E',
+      'Дунга Оперейтинг': '#E17055',
+      'Урал Ойл Энд Газ': '#74B9FF',
+      'Казакойл Актобе': '#FD79A8',
+      'Эмбамунайгаз': '#8B5CF6', // A distinct color for the parent company
+      '': '#DDD6FE' // Default color for unassigned LLPs
+    };
+
+    // Define parent-subsidiary relationships
+    const parentCompanies = {
+      'Эмбамунайгаз': [
+        'Доссормунайгаз',
+        'Жайыкмунайгаз',
+        'Жылоймунайгаз',
+        'Кайнармунайгаз'
+      ]
+    };
+
+    // React component
+    const App = () => {
+      const [data, setData] = React.useState([]);
+      const [groupedData, setGroupedData] = React.useState([]);
+      const [expandedLLPs, setExpandedLLPs] = React.useState({});
+      const [selectedField, setSelectedField] = React.useState(null);
+      const [loading, setLoading] = React.useState(true);
+      const [error, setError] = React.useState(null);
+      const mapRef = React.useRef(null);
+      const markersRef = React.useRef([]);
+      const currentPolygonRef = React.useRef(null); // To store the currently displayed polygon
+
+      // Initialize map and fetch data
+      React.useEffect(() => {
+        try {
+          const map = L.map('map').setView([48.0196, 66.9237], 5);
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 18
+          }).addTo(map);
+          mapRef.current = map;
+          console.log('Map initialized');
+
+          // Fetch and parse ch4.xlsx
+          fetch('./ch4.xlsx')
+            .then(response => {
+              if (!response.ok) {
+                throw new Error('Failed to fetch ch4.xlsx');
+              }
+              return response.arrayBuffer();
+            })
+            .then(data => {
+              const workbook = XLSX.read(data, { type: 'array' });
+              const sheetName = workbook.SheetNames[0];
+              const sheet = workbook.Sheets[sheetName];
+              const json = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+              // Process headers and data
+              const headers = json[0].map(h => h.toString().trim().replace(/^"|"$/g, ''));
+              const rows = json.slice(1).filter(row => row[2] && row[4]); // Fields and Central Coordinate
+
+              const cleanedData = rows.map(row => {
+                const rowObj = headers.reduce((obj, header, i) => {
+                  obj[header] = row[i] ? row[i].toString().trim().replace(/^"|"$/g, '') : '';
+                  return obj;
+                }, {});
+
+                // Clean the LLP name by removing any parenthetical parts like "(Эмбамунайгаз)"
+                const cleanedLLP = rowObj['LLP'] ? rowObj['LLP'].replace(/\s*\(.*\)\s*$/, '') : '';
+
+                const coords = [
+                  rowObj['Coordinate 1'], rowObj['Coordinate 2'], rowObj['Coordinate 3'],
+                  rowObj['Coordinate 4'], rowObj['Coordinate 5'], rowObj['Coordinate 6'],
+                  rowObj['Coordinate 7'], rowObj['Coordinate 8'], rowObj['Coordinate 9'],
+                  rowObj['Coordinate 10'], rowObj['Coordinate 11'], rowObj['Coordinate 12'],
+                  rowObj['Coordinate 13'], rowObj['Coordinate 14'], rowObj['Coordinate 15'],
+                  rowObj['Coordinate 16'], rowObj['Coordinate 17'], rowObj['Coordinate 18'],
+                  rowObj['Coordinate 19'], rowObj['Coordinate 20'], rowObj['Coordinate 21'],
+                  rowObj['Coordinate 22'], rowObj['Coordinate 23'], rowObj['Coordinate 24'],
+                  rowObj['Coordinate 25'], rowObj['Coordinate 26'], rowObj['Coordinate 27'],
+                ].filter(coord => coord)
+                 .map(coord => {
+                   const [lat, lng] = coord.split(',').map(v => parseFloat(v.trim()));
+                   return isNaN(lat) || isNaN(lng) ? null : [lat, lng];
+                 })
+                 .filter(coord => coord);
+
+                const [centralLat, centralLng] = rowObj['Central Coordinate']
+                  .split(',')
+                  .map(v => parseFloat(v.trim()));
+
+                return {
+                  LLP: cleanedLLP, // Use the cleaned LLP name
+                  Fields: rowObj['Fields'],
+                  Area: parseFloat(rowObj['Area (m2)']) || 0,
+                  CentralCoordinate: [centralLat, centralLng],
+                  ShapeCoordinates: coords
+                };
+              });
+
+              // --- Start: New grouping logic for parent/subsidiary companies ---
+              const hierarchicalData = {};
+              
+              // Initialize parent structures and their subsidiary placeholders
+              for (const parentName in parentCompanies) {
+                hierarchicalData[parentName] = {
+                  LLP: parentName,
+                  type: 'parent',
+                  subsidiaries: {},
+                  totalFields: 0 // To sum up fields from all subsidiaries under this parent
+                };
+                parentCompanies[parentName].forEach(subsidiaryName => {
+                    hierarchicalData[parentName].subsidiaries[subsidiaryName] = {
+                        LLP: subsidiaryName,
+                        type: 'subsidiary',
+                        fields: []
+                    };
+                });
+              }
+
+              // Populate hierarchical data with fields
+              cleanedData.forEach(field => {
+                let foundParent = false;
+                for (const parentName in parentCompanies) {
+                  if (parentCompanies[parentName].includes(field.LLP)) {
+                    // This field belongs to a subsidiary of a parent company
+                    hierarchicalData[parentName].subsidiaries[field.LLP].fields.push(field);
+                    hierarchicalData[parentName].totalFields++; // Increment parent's total fields
+                    foundParent = true;
+                    break;
+                  }
+                }
+                if (!foundParent) {
+                  // This is an independent LLP
+                  if (!hierarchicalData[field.LLP]) {
+                    hierarchicalData[field.LLP] = {
+                      LLP: field.LLP,
+                      type: 'independent',
+                      fields: []
+                    };
+                  }
+                  hierarchicalData[field.LLP].fields.push(field);
+                }
+              });
+
+              // Filter out empty subsidiaries (if any subsidiary was defined but had no fields)
+              for (const parentName in hierarchicalData) {
+                  if (hierarchicalData[parentName].type === 'parent') {
+                      for (const subName in hierarchicalData[parentName].subsidiaries) {
+                          if (hierarchicalData[parentName].subsidiaries[subName].fields.length === 0) {
+                              delete hierarchicalData[parentName].subsidiaries[subName];
+                          }
+                      }
+                  }
+              }
+
+              // Convert hierarchicalData object to a sorted array for rendering
+              const groupedArray = Object.values(hierarchicalData).sort((a, b) => {
+                // Sort parents first, then independent LLPs alphabetically
+                if (a.type === 'parent' && b.type !== 'parent') return -1;
+                if (a.type !== 'parent' && b.type === 'parent') return 1;
+                return a.LLP.localeCompare(b.LLP);
+              });
+              // --- End: New grouping logic ---
+
+              // Add markers for all fields
+              cleanedData.forEach(field => {
+                const marker = L.circleMarker(field.CentralCoordinate, {
+                  radius: 8,
+                  fillColor: llpColors[field.LLP] || llpColors[''],
+                  color: '#ffffff',
+                  weight: 3,
+                  opacity: 1,
+                  fillOpacity: 0.9
+                }).addTo(mapRef.current);
+
+                marker.bindPopup(`
+                  <div style="font-family: 'Inter', sans-serif;">
+                      <h3 style="margin: 0 0 8px 0; color: #1f2937; font-size: 18px; font-weight: 600;">${field.Fields}</h3>
+                      <p style="margin: 4px 0; color: #6b7280; font-size: 14px;"><strong>Company:</strong> ${field.LLP || 'N/A'}</p>
+                      <p style="margin: 4px 0; color: #6b7280; font-size: 14px;"><strong>Area:</strong> ${field.Area.toFixed(2)} km²</p>
+                      <div style="margin-top: 8px; padding: 8px; background: ${llpColors[field.LLP] || llpColors['']}; border-radius: 6px; opacity: 0.3;"></div>
+                  </div>
+                `);
+                
+                // When a marker is clicked, select the field and show its polygon
+                marker.on('click', () => {
+                  setSelectedField(field);
+                  // Ensure map view is updated and polygon is drawn
+                  if (mapRef.current) {
+                    mapRef.current.setView(field.CentralCoordinate, 10);
+                    displayFieldPolygon(field);
+                  }
+                });
+                
+                markersRef.current.push(marker);
+              });
+
+              setData(cleanedData);
+              setGroupedData(groupedArray);
+              setLoading(false);
+              console.log('Data loaded:', cleanedData.length, 'fields', groupedArray.length, 'LLPs');
+            })
+            .catch(err => {
+              console.error('Error fetching or parsing XLSX:', err);
+              setError('Failed to load ch4.xlsx. Ensure the file exists in the same folder.');
+              setLoading(false);
+            });
+
+          return () => {
+            map.remove();
+            console.log('Map cleaned up');
+          };
+        } catch (error) {
+          console.error('Error initializing map:', error);
+          setError('Error initializing map');
+          setLoading(false);
+        }
+      }, []);
+
+      // Function to display a single field's polygon
+      const displayFieldPolygon = (field) => {
+        if (!mapRef.current) return;
+
+        // Remove existing polygon if any
+        if (currentPolygonRef.current) {
+          mapRef.current.removeLayer(currentPolygonRef.current);
+          currentPolygonRef.current = null;
+        }
+
+        if (field.ShapeCoordinates && field.ShapeCoordinates.length > 0) {
+          const polygon = L.polygon(field.ShapeCoordinates, {
+            color: llpColors[field.LLP] || llpColors[''],
+            fillColor: llpColors[field.LLP] || llpColors[''],
+            fillOpacity: 0.4,
+            weight: 3,
+            opacity: 0.9
+          }).addTo(mapRef.current);
+          
+          polygon.bindPopup(`
+            <div style="font-family: 'Inter', sans-serif;">
+                <h3 style="margin: 0 0 8px 0; color: #1f2937; font-size: 18px; font-weight: 600;">${field.Fields}</h3>
+                <p style="margin: 4px 0; color: #6b7280; font-size: 14px;"><strong>Company:</strong> ${field.LLP || 'N/A'}</p>
+                <p style="margin: 4px 0; color: #6b7280; font-size: 14px;"><strong>Area:</strong> ${field.Area.toFixed(2)} km²</p>
+                <div style="margin-top: 8px; padding: 8px; background: ${llpColors[field.LLP] || llpColors['']}; border-radius: 6px; opacity: 0.3;"></div>
+            </div>
+          `);
+          
+          polygon.on('click', () => {
+            setSelectedField(field);
+            mapRef.current.fitBounds(polygon.getBounds());
+          });
+          
+          currentPolygonRef.current = polygon; // Store the new polygon
+          polygon.openPopup(); // Open popup immediately
+          mapRef.current.fitBounds(polygon.getBounds()); // Fit map to polygon
+        }
+      };
+
+      // Toggle LLP expansion
+      const toggleLLP = (llp) => {
+        setExpandedLLPs(prev => ({
+          ...prev,
+          [llp]: !prev[llp]
+        }));
+      };
+
+      // Handle field selection from sidebar
+      const handleFieldClick = (field) => {
+        setSelectedField(field);
+        if (mapRef.current) {
+          mapRef.current.setView(field.CentralCoordinate, 10);
+          displayFieldPolygon(field); // Display only this field's polygon
+        }
+      };
+
+      // Render UI
+      return (
+        <div className="flex h-screen">
+          <div className="sidebar p-6">
+            <div className="mb-8">
+              <h1 className="text-3xl font-bold gradient-text mb-2">Kazakhstan</h1>
+              <p className="text-lg text-gray-600">Oil & Gas Reservoirs</p>
+            </div>
+            
+            {loading && (
+              <div className="glass-morphism rounded-2xl p-6 text-center">
+                <div className="animate-pulse-slow">
+                  <div className="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full mx-auto mb-4"></div>
+                  <p className="text-gray-600">Loading reservoirs...</p>
+                </div>
+              </div>
+            )}
+            
+            {error && (
+              <div className="bg-red-50 border border-red-200 rounded-2xl p-4 mb-6">
+                <p className="text-red-700 font-medium">{error}</p>
+              </div>
+            )}
+            
+            {!loading && !error && groupedData.length === 0 && (
+              <div className="glass-morphism rounded-2xl p-6 text-center">
+                <p className="text-gray-600">No data available. Please check if ch4.xlsx exists.</p>
+              </div>
+            )}
+            
+            {selectedField && (
+              <div className="selected-field">
+                <h3 className="text-xl font-bold text-gray-800 mb-3">{selectedField.Fields}</h3>
+                <div className="space-y-2">
+                  <div className="flex items-center">
+                    <div 
+                      className="w-4 h-4 rounded mr-3"
+                      style={{ backgroundColor: llpColors[selectedField.LLP] || llpColors[''] }}
+                    ></div>
+                    <span className="text-gray-700 font-medium">{selectedField.LLP || 'N/A'}</span>
+                  </div>
+                  <p className="text-gray-600">
+                    <span className="font-medium">Area:</span> {selectedField.Area.toFixed(2)} km²
+                  </p>
+                </div>
+              </div>
+            )}
+            
+            {groupedData.length > 0 && (
+              <div className="space-y-3">
+                {groupedData.map((group, index) => (
+                  <div key={index} className={`company-card ${group.type === 'parent' ? 'parent-company-card' : ''}`}>
+                    <div
+                      className="company-header"
+                      onClick={() => toggleLLP(group.LLP)}
+                      style={{
+                        background: `linear-gradient(135deg, ${llpColors[group.LLP] || llpColors['']}15, ${llpColors[group.LLP] || llpColors['']}05)`
+                      }}
+                    >
+                      <div className="flex items-center flex-1">
+                        <div 
+                          className="w-5 h-5 rounded-lg mr-4 shadow-lg"
+                          style={{ backgroundColor: llpColors[group.LLP] || llpColors[''] }}
+                        ></div>
+                        <div>
+                          <h4 className="font-semibold text-gray-800 text-lg">{group.LLP || 'Unknown Company'}</h4>
+                          {group.type === 'parent' && (
+                            <p className="text-sm text-purple-700 font-medium">Parent Company ({group.totalFields} fields)</p>
+                          )}
+                          {group.type === 'independent' && (
+                            <p className="text-sm text-gray-500">LLP ({group.fields.length} fields)</p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-gray-500 text-xl">
+                        {expandedLLPs[group.LLP] ? '−' : '+'}
+                      </div>
+                    </div>
+                    
+                    {expandedLLPs[group.LLP] && (
+                      <div className="border-t border-gray-100">
+                        {group.type === 'parent' ? (
+                          // Render subsidiaries for parent companies
+                          Object.values(group.subsidiaries).map((subsidiary, subIndex) => (
+                            <div key={subIndex} className="ml-4 border-l border-gray-200 pl-4 py-2">
+                                <div
+                                    className="company-header py-2" // Smaller padding for nested header
+                                    onClick={(e) => { e.stopPropagation(); toggleLLP(subsidiary.LLP); }} // Stop propagation to prevent parent toggle
+                                    style={{
+                                        background: `linear-gradient(135deg, ${llpColors[subsidiary.LLP] || llpColors['']}10, ${llpColors[subsidiary.LLP] || llpColors['']}05)` // Lighter gradient for subsidiary
+                                    }}
+                                >
+                                    <div className="flex items-center flex-1">
+                                        <div 
+                                            className="w-4 h-4 rounded-md mr-3 shadow-sm" // Smaller swatch
+                                            style={{ backgroundColor: llpColors[subsidiary.LLP] || llpColors[''] }}
+                                        ></div>
+                                        <div>
+                                            <h5 className="font-medium text-gray-700 text-md">{subsidiary.LLP}</h5>
+                                            <p className="text-xs text-gray-500">Subsidiary LLP ({subsidiary.fields.length} fields)</p>
+                                        </div>
+                                    </div>
+                                    <div className="text-gray-400 text-lg">
+                                        {expandedLLPs[subsidiary.LLP] ? '−' : '+'}
+                                    </div>
+                                </div>
+                                {expandedLLPs[subsidiary.LLP] && ( // Only show fields if subsidiary is expanded
+                                    <div className="border-t border-gray-100 mt-2">
+                                        {subsidiary.fields.map((field, fieldIndex) => (
+                                            <div
+                                                key={fieldIndex}
+                                                className="field-item pl-8" // Further indent fields
+                                                onClick={() => handleFieldClick(field)}
+                                            >
+                                                <div className="flex justify-between items-center">
+                                                    <span className="font-medium text-gray-700">{field.Fields}</span>
+                                                    <span className="text-sm text-gray-500">{field.Area.toFixed(1)} km²</span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                          ))
+                        ) : (
+                          // Render fields directly for independent LLPs
+                          group.fields.map((field, fieldIndex) => (
+                            <div
+                              key={fieldIndex}
+                              className="field-item"
+                              onClick={() => handleFieldClick(field)}
+                            >
+                              <div className="flex justify-between items-center">
+                                <span className="font-medium text-gray-700">{field.Fields}</span>
+                                <span className="text-sm text-gray-500">{field.Area.toFixed(1)} km²</span>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div id="map"></div>
+        </div>
+      );
+    };
+
+    // Render React app
+    try {
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
+      console.log('React app rendered');
+    } catch (error) {
+      console.error('Error rendering React app:', error);
+    }
+  </script>
+</body>
+</html>
