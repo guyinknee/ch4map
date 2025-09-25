@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>CH₄ Measurements — Results Panel</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+  <style>
+    /* Light gray background, dark text */
+    body { background: #f3f4f6; color: #111827; }
+    .card { background: #ffffff; border: 1px solid rgba(0,0,0,0.06); border-radius: 1rem; box-shadow: 0 4px 18px rgba(0,0,0,0.06); }
+    .kpi { color: #374151; font-weight: 600; }
+    .kpi-number { font-size: 1.35rem; font-weight: 800; color: #111827; }
+    .table thead th { text-align: left; color: #6b7280; font-weight: 600; }
+    .table tbody td { color: #111827; }
+    .pill { display:inline-flex; align-items:center; padding:0.125rem 0.5rem; border-radius:9999px; font-size:0.75rem; font-weight:600; }
+    .pill-ok { background:#d1fae5; color:#065f46; }
+    .pill-warn { background:#fef3c7; color:#92400e; }
+    .pill-bad { background:#fee2e2; color:#991b1b; }
+    @media (max-width: 1024px){
+      #wrapper { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="max-w-7xl mx-auto p-4 md:p-6">
+    <div class="mb-6 flex items-center justify-between gap-4">
+      <div>
+        <h1 class="text-2xl md:text-3xl font-bold">Detailed data</h1>
+        <p class="text-gray-600">Field/plant-level methane leak measurements (kg/h) with quick insights.</p>
+      </div>
+      <a href="./measurements.xlsx" download class="hidden md:inline-block bg-indigo-600 hover:bg-indigo-500 transition text-white font-medium px-4 py-2 rounded-lg">Download data</a>
+    </div>
+
+    <div class="grid gap-4 lg:grid-cols-[320px_1fr] items-start" id="wrapper">
+      <!-- Left controls -->
+      <div class="card p-4 md:p-5">
+        <label class="block text-sm text-gray-700 mb-2">Filter by asset (field/plant)</label>
+        <select id="assetSelect" class="w-full rounded-xl border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 py-2 px-3 mb-4"></select>
+
+        <!-- KPIs single row -->
+        <div class="grid grid-cols-3 gap-3">
+          <div class="card p-3">
+            <div class="kpi">Records</div>
+            <div id="kpiCount" class="kpi-number">—</div>
+          </div>
+          <div class="card p-3">
+            <div class="kpi">Peak leak, kg/h</div>
+            <div id="kpiMax" class="kpi-number">—</div>
+          </div>
+          <div class="card p-3">
+            <div class="kpi">Median leak, kg/h</div>
+            <div id="kpiMed" class="kpi-number">—</div>
+          </div>
+        </div>
+
+        <div class="mt-4 flex items-center justify-between">
+          <div class="text-gray-700 font-semibold">Date range</div>
+          <span id="kpiDateRange" class="pill pill-ok">—</span>
+        </div>
+      </div>
+
+      <!-- Right visuals & table -->
+      <div class="space-y-4">
+        <div class="card p-4 md:p-5">
+          <div class="grid lg:grid-cols-2 gap-6">
+            <div>
+              <div class="font-semibold mb-2 text-gray-800">Leak over time</div>
+              <canvas id="timeChart"></canvas>
+            </div>
+            <div>
+              <div class="font-semibold mb-2 text-gray-800">Reporter breakdown</div>
+              <!-- Fixed-height wrapper is the key -->
+              <div id="reporterWrap" style="height: 260px; position: relative; display: flex; justify-content: center; align-items: center;">
+                <canvas id="reporterChart" style="display: block;"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card p-4 md:p-5 overflow-x-auto">
+          <div class="flex items-center justify-between gap-3 mb-3">
+            <div class="font-semibold text-gray-800">Measurements (coords hidden)</div>
+            <div class="text-xs text-gray-500">Columns: Date, Leak Rate (kg/h), Reporter, Note</div>
+          </div>
+          <table class="table w-full border-collapse">
+            <thead>
+              <tr>
+                <th class="py-2">Date</th>
+                <th class="py-2">Leak Rate (kg/h)</th>
+                <th class="py-2">Reporter</th>
+                <th class="py-2">Note</th>
+              </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const { DateTime } = luxon;
+    let rawRows = [];
+    let byAsset = new Map();
+    let timeChart, reporterChart;
+
+    function parseDate(v){
+      if (!v && v !== 0) return null;
+      if (typeof v === 'number') {
+        const epoch = DateTime.fromISO('1899-12-30');
+        return epoch.plus({ days: v }).toJSDate();
+      }
+      const txt = String(v).trim();
+      if (!txt) return null;
+      let dt = DateTime.fromFormat(txt, 'dd.MM.yyyy');
+      if (dt.isValid) return dt.toJSDate();
+      const d2 = new Date(txt);
+      return isNaN(d2.getTime()) ? null : d2;
+    }
+
+    function fmt(n){ return n?.toLocaleString(undefined, {maximumFractionDigits: 0}); }
+    function median(arr){
+      if(!arr.length) return 0;
+      const a = [...arr].sort((x,y)=>x-y);
+      const mid = Math.floor(a.length/2);
+      return a.length % 2 ? a[mid] : (a[mid-1]+a[mid])/2;
+    }
+    function getParam(name){
+      const url = new URL(window.location.href);
+      return url.searchParams.get(name);
+    }
+
+    function loadXLSX(){
+      return fetch('./measurements.xlsx')
+        .then(r => r.arrayBuffer())
+        .then(buf => {
+          const wb = XLSX.read(buf, {type:'array'});
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const json = XLSX.utils.sheet_to_json(ws, {defval: null});
+          return json;
+        });
+    }
+
+    function groupByAsset(rows){
+      const m = new Map();
+      rows.forEach(r => {
+        const asset = (r['Field'] || r['Asset'] || r['Plant'] || 'Unknown').toString();
+        if(!m.has(asset)) m.set(asset, []);
+        const d = parseDate(r['Date']);
+        m.get(asset).push({
+          asset,
+          date: d,
+          leak: Number(r['Leak Rate (kg/h)'] ?? r['Leak kg/h'] ?? r['Leak'] ?? 0),
+          reporter: r['Reporter'] ?? '',
+          note: r['Note'] ?? ''
+        });
+      });
+      for(const [k, arr] of m){
+        arr.sort((a,b)=>(a.date?.getTime()||0)-(b.date?.getTime()||0));
+      }
+      return m;
+    }
+
+    function clearUI(){
+      document.getElementById('kpiCount').textContent = '—';
+      document.getElementById('kpiMax').textContent = '—';
+      document.getElementById('kpiMed').textContent = '—';
+      document.getElementById('kpiDateRange').textContent = '—';
+      document.getElementById('kpiDateRange').className = 'pill pill-ok';
+      if (timeChart) { timeChart.destroy(); timeChart = null; }
+      if (reporterChart) { reporterChart.destroy(); reporterChart = null; }
+      document.getElementById('tableBody').innerHTML = '';
+    }
+
+    function fillAssetSelect(){
+      const sel = document.getElementById('assetSelect');
+      const entries = [...byAsset.entries()].sort((a,b)=>b[1].length - a[1].length || a[0].localeCompare(b[0]));
+      sel.innerHTML = entries.map(([name])=>`<option value="${name}">${name}</option>`).join('');
+
+      const q = getParam('field');
+      if(q && byAsset.has(q) && (byAsset.get(q)||[]).length){
+        sel.value = q;
+        onAssetChange();
+      } else {
+        sel.selectedIndex = -1; // do not auto-select
+        clearUI();
+      }
+      sel.addEventListener('change', onAssetChange);
+    }
+
+    function onAssetChange(){
+      const sel = document.getElementById('assetSelect');
+      const asset = sel.value;
+      const rows = byAsset.get(asset) || [];
+
+      // If no data for this asset, clear and notify parent to possibly hide
+      if (!rows.length){
+        clearUI();
+        try { window.parent.postMessage({ type: 'asset-has-no-data', asset }, '*'); } catch (e) {}
+        return;
+      }
+
+      // Inform parent that a valid asset was selected so it can sync the main map
+      try { window.parent.postMessage({ type: 'select-asset', asset }, '*'); } catch (e) {}
+
+      updateKPIs(rows);
+      drawCharts(rows);
+      fillTable(rows);
+    }
+
+    function updateKPIs(rows){
+      const leaks = rows.map(r=>r.leak).filter(v=>Number.isFinite(v));
+      const max = leaks.length ? Math.max(...leaks) : 0;
+      document.getElementById('kpiCount').textContent = fmt(rows.length);
+      document.getElementById('kpiMax').textContent = fmt(max);
+      document.getElementById('kpiMed').textContent = fmt(median(leaks));
+
+      const dates = rows.map(r=>r.date).filter(Boolean);
+      const minD = dates.length ? new Date(Math.min(...dates)) : null;
+      const maxD = dates.length ? new Date(Math.max(...dates)) : null;
+      const rng = (minD && maxD) ? `${luxon.DateTime.fromJSDate(minD).toFormat('yyyy-LL-dd')} → ${luxon.DateTime.fromJSDate(maxD).toFormat('yyyy-LL-dd')}` : '—';
+      document.getElementById('kpiDateRange').textContent = rng;
+      document.getElementById('kpiDateRange').className = 'pill ' + (max > 1000 ? 'pill-bad' : (max > 500 ? 'pill-warn' : 'pill-ok'));
+    }
+
+    function drawCharts(rows){
+      const ctx1 = document.getElementById('timeChart');
+      const ctx2 = document.getElementById('reporterChart');
+      const labels = rows.map(r=> r.date ? luxon.DateTime.fromJSDate(r.date).toFormat('yyyy-LL-dd') : '—');
+      const data = rows.map(r=> r.leak || 0);
+
+      if(timeChart){ timeChart.destroy(); }
+      timeChart = new Chart(ctx1, {
+        type: 'line',
+        data: { labels, datasets: [{ label: 'Leak (kg/h)', data, tension: 0.3 }]},
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { autoSkip: true, maxTicksLimit: 8 }},
+            y: { beginAtZero: true }
+          }
+        }
+      });
+
+      const byRep = rows.reduce((acc, r)=>{
+        const k = r.reporter || 'Unknown';
+        acc[k] = (acc[k]||0) + 1;
+        return acc;
+      }, {});
+      const repLabels = Object.keys(byRep);
+      const repData = Object.values(byRep);
+
+      if(reporterChart){ reporterChart.destroy(); }
+      reporterChart = new Chart(ctx2, {
+        type: 'doughnut',
+        data: { labels: repLabels, datasets: [{ data: repData }]},
+        options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+      });
+    }
+
+    function fillTable(rows){
+      const tb = document.getElementById('tableBody');
+      tb.innerHTML = rows.map(r => `
+        <tr class="border-t border-gray-200">
+          <td class="py-2">${r.date ? luxon.DateTime.fromJSDate(r.date).toFormat('yyyy-LL-dd') : '—'}</td>
+          <td class="py-2">${r.leak?.toLocaleString() ?? '—'}</td>
+          <td class="py-2">${r.reporter || '—'}</td>
+          <td class="py-2">${r.note || ''}</td>
+        </tr>
+      `).join('');
+    }
+
+    // Boot
+    loadXLSX().then(rows => {
+      rawRows = rows;
+      byAsset = groupByAsset(rows);
+      fillAssetSelect();
+    }).catch(e => {
+      console.error(e);
+      alert('Failed to load measurements.xlsx. Place it next to this HTML.');
+    });
+
+    // Accept set-asset from parent (main map -> results panel)
+    window.addEventListener('message', (e) => {
+      const { type, asset } = e.data || {};
+      if(type === 'set-asset'){
+        const sel = document.getElementById('assetSelect');
+        if (asset && byAsset.has(asset) && (byAsset.get(asset)||[]).length) {
+          sel.value = asset;
+          onAssetChange();
+        } else {
+          sel.selectedIndex = -1;
+          clearUI();
+        }
+      }
+    });
+  </script>
+</body>
+</html>
