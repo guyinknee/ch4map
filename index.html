@@ -1,4 +1,4 @@
-<!DOCTYPE html>    
+<!DOCTYPE html>
 <html lang="en">
 <head>
  <meta charset="UTF-8">
@@ -205,35 +205,95 @@
 <body>
   <div id="root"></div>
 
-  <script type="text/babel">
+  <script type="text/babel" data-presets="env,react">
     // Premium color palette with gradients
     const llpColors = {
-      'Казгермунай': '#FF6B6B',
-      'Озенмунайгаз': '#4ECDC4',
-      'Доссормунайгаз': '#FFE66D',
-      'Жайыкмунайгаз': '#95E1D3',
-      'Жылоймунайгаз': '#FF8B94',
-      'Кайнармунайгаз': '#A8E6CF',
-      'Мангистаумунайгаз': '#C7CEEA',
-      'Каражанбасмунай': '#B4F8C8',
-      'Казахтуркмунай': '#FFEAA7',
-      'Урихтау Оперейтинг': '#FDCB6E',
-      'Дунга Оперейтинг': '#E17055',
-      'Урал Ойл Энд Газ': '#74B9FF',
-      'Казакойл Актобе': '#FD79A8',
-      'Эмбамунайгаз': '#8B5CF6', // A distinct color for the parent company
+      'Kazgermunai': '#FF6B6B',
+      'Ozenmunaigas': '#4ECDC4',
+      'Dossormunaigas': '#FFE66D',
+      'Zhaiykmunaigas': '#95E1D3',
+      'Zhylyoimunaigas': '#FF8B94',
+      'Kaynarmunaigas': '#A8E6CF',
+      'Mangistaumunaygas': '#C7CEEA',
+      'Karazhanbasmunai': '#B4F8C8',
+      'Kazakhturkmunai': '#FFEAA7',
+      'Urikhtau Operating': '#FDCB6E',
+      'Dunga Operating': '#E17055',
+      'Ural Oil and Gas': '#74B9FF',
+      'Kazakoil Aktobe': '#FD79A8',
+      'Embamunaigas': '#8B5CF6', // A distinct color for the parent company
       '': '#DDD6FE' // Default color for unassigned LLPs
     };
 
     // Define parent-subsidiary relationships
     const parentCompanies = {
-      'Эмбамунайгаз': [
-        'Доссормунайгаз',
-        'Жайыкмунайгаз',
-        'Жылоймунайгаз',
-        'Кайнармунайгаз'
+      'Embamunaigas': [
+        'Dossormunaigas',
+        'Zhaiykmunaigas',
+        'Zhylyoimunaigas',
+        'Kaynarmunaigas'
       ]
     };
+
+
+    function parseExcelishDate(v) {
+      if (v === null || v === undefined || v === "") return null;
+
+      // Excel serial dates: days since 1899-12-30
+      if (typeof v === "number") {
+        const base = new Date("1899-12-30T00:00:00Z");
+        const ms = v * 24 * 60 * 60 * 1000;
+        return new Date(base.getTime() + ms);
+      }
+
+      const s = String(v).trim();
+      if (!s) return null;
+
+      // dd.MM.yyyy (e.g., 11.06.2024)
+      const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(s);
+      if (m) {
+        const [_, dd, mm, yyyy] = m;
+        // construct as yyyy-mm-dd to avoid locale issues; treat as UTC to avoid TZ shifts
+        return new Date(`${yyyy}-${mm}-${dd}T00:00:00Z`);
+      }
+
+      // Fallback: let JS try
+      const d = new Date(s);
+      return isNaN(d.getTime()) ? null : d;
+    }
+
+    function formatYMD(d) {
+      if (!d) return "—";
+      const yyyy = d.getUTCFullYear();
+      const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+      const dd = String(d.getUTCDate()).padStart(2, "0");
+      return `${yyyy}-${mm}-${dd}`;
+    }
+
+    let MEAS = null; // { "FieldName": [ {date, leak, lat, lon, reporter, note}, ... ] }
+    async function loadMeasurements(){
+      const res = await fetch('./measurements.xlsx');
+      const buf = await res.arrayBuffer();
+      const wb = XLSX.read(buf, {type:'array'});
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, {defval: null});
+      const m = {};
+      rows.forEach(r => {
+        const asset = (r['Field'] || r['Asset'] || r['Plant'] || 'Unknown').toString();
+        (m[asset] ||= []).push({  
+          date: parseExcelishDate(r["Date"]),
+          leak: Number(r['Leak Rate (kg/h)'] ?? r['Leak kg/h'] ?? r['Leak'] ?? 0),
+          lat: r['Latitude'] != null ? Number(r['Latitude']) : null,
+          lon: r['Longitude'] != null ? Number(r['Longitude']) : null,
+          reporter: r['Reporter'] ?? '',
+          note: r['Note'] ?? ''
+        });
+      });
+      // sort by date for a nicer UX
+      for(const k in m){ m[k].sort((a,b)=>(a.date||0)-(b.date||0)); }
+      MEAS = m;
+    }
+    loadMeasurements();
 
     // React component
     const App = () => {
@@ -284,7 +344,7 @@
 
                 // Clean the LLP name by removing any parenthetical parts like "(Эмбамунайгаз)"
                 const cleanedLLP = rowObj['LLP'] ? rowObj['LLP'].replace(/\s*\(.*\)\s*$/, '') : '';
-//Codeupdateline
+
                 const coords = [
                   rowObj['Coordinate 1'], rowObj['Coordinate 2'], rowObj['Coordinate 3'],
                   rowObj['Coordinate 4'], rowObj['Coordinate 5'], rowObj['Coordinate 6'],
@@ -482,22 +542,95 @@
         }));
       };
 
-      // Handle field selection from sidebar
-      const handleFieldClick = (field) => {
-        setSelectedField(field);
-        if (mapRef.current) {
-          mapRef.current.setView(field.CentralCoordinate, 10);
-          displayFieldPolygon(field); // Display only this field's polygon
-        }
-      };
+    const measurementLayerRef = React.useRef(null);
+    
+    function leakColor(leak){
+      if (leak > 1000) return '#ef4444'; // red
+      if (leak > 500)  return '#f59e0b'; // amber
+      return '#10b981';                  // green
+    }
 
+    function makeTriangleIcon(leak) {
+      const size = 22;              // tweak overall marker size here
+      const fill = leakColor(leak); // color by severity
+      return L.divIcon({
+        className: 'tri-marker',    // no default Leaflet classes
+        html: `
+          <svg width="${size}" height="${size}" viewBox="0 0 24 24" style="display:block;">
+            <!-- Equilateral-ish triangle pointing up -->
+            <polygon points="12,2 22,22 2,22"
+                    fill="${fill}" stroke="#ffffff" stroke-width="2"
+                    vector-effect="non-scaling-stroke"/>
+          </svg>
+        `,
+        iconSize: [size, size],
+        iconAnchor: [12, 20],       // tip sits near the location point
+        tooltipAnchor: [0, -12]
+      });
+    }
+
+
+    const showMeasurementPoints = (field) => {
+      if (!mapRef.current || !MEAS) return;
+
+      // clear previous layer
+      if (measurementLayerRef.current) {
+        mapRef.current.removeLayer(measurementLayerRef.current);
+        measurementLayerRef.current = null;
+      }
+
+      const arr = MEAS[field.Fields] || []; // match by field name
+      if (!arr.length) return;
+
+      const grp = L.layerGroup();
+      arr.forEach(r => {
+        if (Number.isFinite(r.lat) && Number.isFinite(r.lon)) {
+          const color = r.leak > 1000 ? '#ef4444' : (r.leak > 500 ? '#f59e0b' : '#10b981');
+          const dateLabel = r.date ? formatYMD(r.date) : "";
+          const m = L.marker([r.lat, r.lon], { icon: makeTriangleIcon(r.leak) });
+          m.bindTooltip(
+            `${(r.leak || 0).toLocaleString()} kg/h · ${r.reporter || "—"}${dateLabel ? " · " + dateLabel : ""}`
+          );
+          grp.addLayer(m);
+        }
+      });
+
+      grp.addTo(mapRef.current);
+      measurementLayerRef.current = grp;
+    };
+
+    const handleFieldClick = (field) => {
+      setSelectedField(field);
+      if (mapRef.current) {
+        mapRef.current.setView(field.CentralCoordinate, 10);
+        displayFieldPolygon(field);
+      }
+      // 1) plot measurement points if we have any
+      showMeasurementPoints(field);
+      // 2) open the side panel with the results table/charts
+      const hasMeasurements = !!(MEAS && MEAS[field.Fields] && MEAS[field.Fields].length);
+
+      if (hasMeasurements) {
+        // (A) plot markers etc.
+        showMeasurementPoints(field);
+        // (B) open the side panel
+        showResultsPanel(field.Fields);
+      } else {
+        // No data: ensure measurement markers and panel are hidden
+        if (measurementLayerRef.current && mapRef.current) {
+          mapRef.current.removeLayer(measurementLayerRef.current);
+          measurementLayerRef.current = null;
+        }
+        hideResultsPanel();
+      }
+    };
       // Render UI
       return (
         <div className="flex h-screen">
           <div className="sidebar p-6">
             <div className="mb-8">
               <h1 className="text-3xl font-bold gradient-text mb-2">Kazakhstan</h1>
-              <p className="text-lg text-gray-600">KMG's Oil & Gas Reservoirs</p>
+              <p className="text-lg text-gray-600">Oil & Gas Reservoirs and Plants</p>
             </div>
             
             {loading && (
@@ -638,9 +771,81 @@
             )}
           </div>
           <div id="map"></div>
+
+          <div
+            id="resultsPanel"
+            style={{
+              position: "fixed",
+              top: 0,
+              right: 0,
+              width: "38vw",
+              maxWidth: "680px",
+              height: "100vh",
+              background: "#ffffffF2",
+              backdropFilter: "blur(12px)",
+              borderLeft: "1px solid rgba(0,0,0,0.08)",
+              boxShadow: "-10px 0 30px rgba(0,0,0,0.10)",
+              transform: "translateX(100%)",
+              transition: "transform 300ms ease",
+              zIndex: 5000
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "10px 14px",
+                borderBottom: "1px solid #eee"
+              }}
+            >
+              <div style={{ fontWeight: 700, color: "#1f2937" }}>CH₄ Measurements</div>
+              <button
+                onClick={() => hideResultsPanel()}
+                style={{
+                  padding: "6px 10px",
+                  border: "1px solid #ddd",
+                  borderRadius: "8px",
+                  background: "#fff"
+                }}
+              >
+                Close
+              </button>
+            </div>
+
+            <iframe
+              id="resultsFrame"
+              src=""
+              style={{
+                border: "none",
+                width: "100%",
+                height: "calc(100% - 48px)"
+              }}
+            />
+          </div>
         </div>
       );
     };
+    // Utility functions (must be outside JSX!)
+    function showResultsPanel(fieldName){
+      const frame = document.getElementById('resultsFrame');
+      frame.src = 'ch4-results.html?field=' + encodeURIComponent(fieldName);
+      document.getElementById('resultsPanel').style.transform = 'translateX(0%)';
+    }
+    function hideResultsPanel(){
+      document.getElementById('resultsPanel').style.transform = 'translateX(100%)';
+    }
+    window.addEventListener('message', (e) => {
+      const { type, asset } = e.data || {};
+      if (type === 'select-asset' && asset) {
+        const match = allFieldsData?.find(f => f.Fields === asset); // adjust lookup
+        if (match) handleFieldClick(match);
+      }
+      if (type === 'asset-has-no-data') {
+        hideResultsPanel();
+        // optionally show a toast/snackbar: "No CH₄ measurements for this asset yet."
+      }
+    });
 
     // Render React app
     try {
